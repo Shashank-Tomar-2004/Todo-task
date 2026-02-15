@@ -1,77 +1,111 @@
-# Frontend Internship Assignment - Task Board
+# Frontend Internship Assignment - Task Scheduler
 
-A Task Board web app built with Next.js (App Router) that fulfills the given assignment requirements.
+A frontend-only task management application built with Next.js (App Router), TypeScript, and Tailwind CSS.
 
-## Features
+## Live Project
 
-- Static login flow with hardcoded credentials
-  - Email: `intern@demo.com`
-  - Password: `intern123`
-- Invalid login error handling
-- Remember me using localStorage + auth cookie
-- Logout functionality
-- Protected board route (`/board`) via Next middleware
-- Fixed task columns: `Todo`, `Doing`, `Done`
-- Task fields: title, description, priority, due date, tags, createdAt
-- Create, edit, delete tasks
-- Drag and drop across columns
-- Search by title
-- Filter by priority
-- Sort by due date (empty due dates always last)
-- Activity log for create/edit/move/delete actions
-- Persistent board state with safe storage handling
-- Reset board with confirmation
-- Basic unit tests (3)
+- Deployed URL: `https://taskscheduler-one.vercel.app`
+- GitHub Repository: `https://github.com/shashank-tomar-2004/todo-task`
 
-## Tech
+## Demo Login
 
-- Next.js 16
+This assignment uses a static login flow (as required for a frontend-only setup).
+
+- Email: `intern@demo.com`
+- Password: `intern123`
+
+## Assignment Compliance
+
+- No backend/database server used
+- Data is persisted locally in browser storage (`localStorage`)
+- Auth is simulated via local-only logic and route protection middleware
+
+## Key Features
+
+- Static login with validation and logout
+- Protected routes (`/board/...`) using middleware
+- Sidebar navigation with dedicated sections:
+  - Home
+  - My Tasks
+  - Inbox
+  - Portfolios
+  - Goals
+- Top workspace tabs:
+  - Overview
+  - List
+  - Board
+  - Calendar
+  - Documents
+  - Messages
+- Project portals:
+  - Tasks are grouped by project
+  - Dedicated project board and project calendar views
+- Task management:
+  - Create, edit, delete tasks
+  - Drag and drop between `Todo`, `Doing`, `Done`
+  - Search, filter, and sort
+  - Tags, due date, priority, project mapping
+- Calendar view:
+  - Monthly calendar with task counts
+  - Day-level task detail panel
+- Documents module (frontend-only):
+  - Upload, list, download, delete (local state)
+- Messages module (frontend-only):
+  - Send/receive simulation in local state
+- Activity tracking:
+  - Activity feed inside Messages section
+  - Clear all or clear per activity item
+- Invite/Share/Settings modals with local-only behavior
+- Theme toggle with animation
+- Responsive overflow handling:
+  - Scrollable task columns and panels
+  - Scroll-safe create-task form area
+  - Modal max-height scrolling for smaller screens
+
+## Tech Stack
+
+- Next.js 16 (App Router)
 - React 19
 - TypeScript
-- Tailwind CSS v4 (utility classes)
-- Vitest for unit tests
+- Tailwind CSS v4
+- Vitest
 
 ## Run Locally
 
-1. Install dependencies:
-
 ```bash
 npm install
-```
-
-2. Start development server:
-
-```bash
 npm run dev
 ```
 
-3. Open `http://localhost:3000`
+Open `http://localhost:3000`.
 
-## Test
-
-```bash
-npm run test
-```
-
-## Build
+## Scripts
 
 ```bash
+npm run dev
 npm run build
 npm run start
+npm run test
+npm run lint
 ```
 
-## Project Structure
+## Verification Status
 
-- `src/app/login/page.tsx`: login screen and static credential validation
-- `src/app/board/page.tsx`: main task board UI and state/actions
-- `src/middleware.ts`: route protection logic
-- `src/lib/storage.ts`: persistence and safe localStorage parsing
-- `src/lib/task-utils.ts`: search/filter/sort/move helpers
-- `src/lib/task-utils.test.ts`: unit tests
+Executed locally:
 
-## Assignment Submission Notes
+- `npm run build` -> pass
+- `npm run test` -> pass (3 tests)
 
-For submission include:
-- Deployed application URL
-- ZIP of source code
-- This README
+## Important Paths
+
+- `src/app/login/page.tsx` - Login page
+- `src/app/board/[[...slug]]/page.tsx` - Main workspace + section/tab/project routing UI
+- `src/middleware.ts` - Auth/route guard
+- `src/lib/storage.ts` - Local persistence helpers
+- `src/lib/task-utils.ts` - Search/filter/sort/board helpers
+- `src/lib/task-utils.test.ts` - Unit tests
+
+## Notes for Reviewers
+
+- This project intentionally avoids backend/database services to match the internship assignment constraints.
+- Features like Invite, Share, Messages, and Documents are implemented as frontend workflows with local persistence.

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useEffect, useMemo, useReducer, useState } from "react";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import ThemeToggle from "@/components/theme-toggle";
 import { clearAuthCookie } from "@/lib/auth";
 import { ACTIVITY_LIMIT } from "@/lib/constants";
@@ -71,6 +71,8 @@ const emptyDraft: DraftTask = {
   status: "todo",
 };
 
+const DEFAULT_PROJECTS = ["General", "Personal", "Design", "Development", "Marketing", "Research"] as const;
+
 const sideItems: Array<{ key: WorkspaceSection; label: string; icon: string }> = [
   { key: "home", label: "Home", icon: "⌂" },
   { key: "my_tasks", label: "My Tasks", icon: "◔" },
@@ -82,11 +84,9 @@ const sideItems: Array<{ key: WorkspaceSection; label: string; icon: string }> =
 
 const topTabs: Array<{ key: WorkspaceTab; label: string; icon: string }> = [
   { key: "overview", label: "Overview", icon: "◌" },
-  { key: "list", label: "List", icon: "☰" },
   { key: "board", label: "Board", icon: "◉" },
   { key: "calendar", label: "Calendar", icon: "☷" },
   { key: "documents", label: "Documents", icon: "⌗" },
-  { key: "messages", label: "Messages", icon: "◍" },
 ];
 
 const columnPalette: Record<TaskStatus, string> = {
@@ -292,9 +292,10 @@ function parseBoardRoute(slug: string[] | undefined): {
 
 export default function BoardPage() {
   const params = useParams<{ slug?: string[] }>();
+  const pathname = usePathname();
   const router = useRouter();
-  const [state, dispatch] = useReducer(boardReducer, initialState);
-  const hasLoadedRef = useRef(false);
+  const [state, dispatch] = useReducer(boardReducer, initialState, () => loadBoardState());
+  const [isMounted, setIsMounted] = useState(false);
   const routeState = parseBoardRoute(params.slug);
   const activeSection = routeState.section;
   const activeTab = routeState.tab;
@@ -315,38 +316,72 @@ export default function BoardPage() {
 
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteAccess, setInviteAccess] = useState<AccessLevel>("viewer");
+  const [meetingTitle, setMeetingTitle] = useState("");
+  const [meetingNotes, setMeetingNotes] = useState("");
 
   const [messageInput, setMessageInput] = useState("");
 
   const [calendarMonth, setCalendarMonth] = useState(new Date());
   const [selectedDay, setSelectedDay] = useState<string>(new Date().toISOString().slice(0, 10));
+  const [portfolioSelection, setPortfolioSelection] = useState("");
+  const [portfolioFilteredSelection, setPortfolioFilteredSelection] = useState("");
 
   const [documentBusy, setDocumentBusy] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editDraft, setEditDraft] = useState<DraftTask>(emptyDraft);
+  const [isPageTransitioning, setIsPageTransitioning] = useState(false);
+
+  const navigateWithFade = (nextPath: string) => {
+    if (nextPath === pathname) return;
+    setIsPageTransitioning(true);
+    window.setTimeout(() => {
+      router.push(nextPath);
+    }, 140);
+  };
 
   const goTo = (section: WorkspaceSection, tab: WorkspaceTab) => {
-    router.push(`/board/${section}/${tab}`);
+    navigateWithFade(`/board/${section}/${tab}`);
   };
 
   const goToProject = (project: string, tab: WorkspaceTab = "board") => {
-    router.push(`/board/project/${encodeURIComponent(project)}/${tab}`);
+    navigateWithFade(`/board/project/${encodeURIComponent(project)}/${tab}`);
   };
 
   const handleSectionNavigate = (section: WorkspaceSection) => {
     goTo(section, "board");
+    if (section === "inbox") {
+      setNotice("Inbox opens your communication hub.");
+      return;
+    }
+    if (section === "goals") {
+      setNotice("Goals opens list view for tracked goals.");
+      return;
+    }
     const label = sideItems.find((item) => item.key === section)?.label ?? section;
     setNotice(`${label} view loaded`);
   };
 
   useEffect(() => {
-    const loaded = loadBoardState();
-    dispatch({ type: "load", payload: loaded });
-    hasLoadedRef.current = true;
+    saveBoardState(state);
+  }, [state]);
+
+  useEffect(() => {
+    // Fade in after route has changed.
+    const id = window.requestAnimationFrame(() => setIsPageTransitioning(false));
+    return () => window.cancelAnimationFrame(id);
+  }, [pathname]);
+
+  useEffect(() => {
+    setIsMounted(true);
   }, []);
 
   useEffect(() => {
-    if (!hasLoadedRef.current) return;
-    saveBoardState(state);
-  }, [state]);
+    // Prevent stale filters from making valid data look empty after navigation.
+    setSearchTerm("");
+    setProjectFilter(activeProject ?? "all");
+    setPriorityFilter("all");
+    setSortDirection("asc");
+  }, [activeProject, activeSection]);
 
   useEffect(() => {
     if (!notice) return;
@@ -366,16 +401,25 @@ export default function BoardPage() {
   );
 
   const projectOptions = useMemo(() => {
-    const set = new Set<string>(["General", "Personal", "Design", "Development", "Marketing"]);
+    const set = new Set<string>(DEFAULT_PROJECTS);
     state.tasks.forEach((task) => set.add(task.project));
     return Array.from(set);
   }, [state.tasks]);
 
   const projectPortals = useMemo(() => {
-    const set = new Set<string>();
-    state.tasks.forEach((task) => set.add(task.project));
-    return Array.from(set);
-  }, [state.tasks]);
+    return projectOptions;
+  }, [projectOptions]);
+
+  useEffect(() => {
+    if (activeSection !== "portfolios" || activeProject) return;
+    if (projectPortals.length === 0) {
+      if (portfolioSelection) setPortfolioSelection("");
+      return;
+    }
+    if (!projectPortals.includes(portfolioSelection)) {
+      setPortfolioSelection(projectPortals[0]);
+    }
+  }, [activeProject, activeSection, portfolioSelection, projectPortals]);
 
   const sectionTasks = useMemo(() => {
     const term = globalSearchTerm.trim().toLowerCase();
@@ -390,19 +434,52 @@ export default function BoardPage() {
 
     switch (activeSection) {
       case "my_tasks":
-        return base.filter((task) => task.project === "Personal" || task.favorite);
+        return base;
       case "inbox":
         return base.filter((task) => task.status === "todo" || task.priority === "high");
       case "portfolios":
-        return base.filter((task) => task.project !== "General");
+        return activeProject ? base.filter((task) => task.project === activeProject) : base;
       case "goals":
-        return base.filter((task) => task.status !== "done" && task.dueDate.length > 0);
+        return base;
       case "favorites":
         return base.filter((task) => task.favorite);
       default:
         return base;
     }
   }, [activeProject, activeSection, filteredTasks, globalSearchTerm, projectFilter, state.settings.showCompleted]);
+
+  const activeWorkspaceTab: WorkspaceTab =
+    activeSection === "inbox" ? "messages" : activeSection === "goals" ? "list" : activeTab;
+  const canCreateTasks = activeWorkspaceTab === "board" && activeSection === "my_tasks";
+  const showTopAddTask = canCreateTasks;
+
+  const portfolioFilteredProjects = useMemo(() => {
+    const source = activeSection === "portfolios" ? sectionTasks : filteredTasks;
+    const set = new Set<string>();
+    source.forEach((task) => set.add(task.project));
+    if (set.size === 0) {
+      projectPortals.forEach((project) => set.add(project));
+    }
+    return Array.from(set);
+  }, [activeSection, filteredTasks, projectPortals, sectionTasks]);
+
+  const projectTaskCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    state.tasks.forEach((task) => {
+      counts[task.project] = (counts[task.project] ?? 0) + 1;
+    });
+    return counts;
+  }, [state.tasks]);
+
+  useEffect(() => {
+    if (portfolioFilteredProjects.length === 0) {
+      if (portfolioFilteredSelection) setPortfolioFilteredSelection("");
+      return;
+    }
+    if (!portfolioFilteredProjects.includes(portfolioFilteredSelection)) {
+      setPortfolioFilteredSelection(portfolioFilteredProjects[0]);
+    }
+  }, [portfolioFilteredProjects, portfolioFilteredSelection]);
 
   const groupedColumns = useMemo(
     () =>
@@ -421,28 +498,84 @@ export default function BoardPage() {
   );
 
   const summary = useMemo(() => {
-    const total = sectionTasks.length;
-    const todo = sectionTasks.filter((task) => task.status === "todo").length;
-    const doing = sectionTasks.filter((task) => task.status === "doing").length;
-    const done = sectionTasks.filter((task) => task.status === "done").length;
-    const favorites = sectionTasks.filter((task) => task.favorite).length;
+    const scopeTasks = activeProject ? state.tasks.filter((task) => task.project === activeProject) : state.tasks;
+    const total = scopeTasks.length;
+    const todo = scopeTasks.filter((task) => task.status === "todo").length;
+    const doing = scopeTasks.filter((task) => task.status === "doing").length;
+    const done = scopeTasks.filter((task) => task.status === "done").length;
+    const favorites = scopeTasks.filter((task) => task.favorite).length;
     return { total, todo, doing, done, favorites };
-  }, [sectionTasks]);
+  }, [activeProject, state.tasks]);
 
   const monthGrid = useMemo(() => getMonthGrid(calendarMonth), [calendarMonth]);
 
+  const calendarScopeTasks = useMemo(
+    () => (activeProject ? state.tasks.filter((task) => task.project === activeProject) : state.tasks),
+    [activeProject, state.tasks],
+  );
+
   const tasksByDueDate = useMemo(
     () =>
-      sectionTasks.reduce<Record<string, Task[]>>((acc, task) => {
+      calendarScopeTasks.reduce<Record<string, Task[]>>((acc, task) => {
         if (!task.dueDate) return acc;
         if (!acc[task.dueDate]) acc[task.dueDate] = [];
         acc[task.dueDate].push(task);
         return acc;
       }, {}),
-    [sectionTasks],
+    [calendarScopeTasks],
   );
 
   const selectedDayTasks = tasksByDueDate[selectedDay] ?? [];
+
+  const applyBoardAction = (action: BoardAction) => {
+    const nextState = boardReducer(state, action);
+    dispatch(action);
+    saveBoardState(nextState);
+  };
+
+  const buildTaskFromDraft = (source: DraftTask): Task => {
+    const now = new Date().toISOString();
+    const existing = source.id ? state.tasks.find((task) => task.id === source.id) : undefined;
+    return {
+      id: source.id ?? crypto.randomUUID(),
+      project: source.project.trim() || existing?.project || activeProject || "General",
+      title: source.title.trim(),
+      description: source.description.trim(),
+      priority: source.priority,
+      dueDate: source.dueDate,
+      tags: source.tags
+        .split(",")
+        .map((tag) => tag.trim())
+        .filter(Boolean),
+      status: source.status,
+      createdAt: existing?.createdAt ?? now,
+      favorite: existing?.favorite ?? false,
+    };
+  };
+
+  const scheduleMeeting = () => {
+    const title = meetingTitle.trim() || "Project Meeting";
+    const project = activeProject ?? (projectFilter !== "all" ? projectFilter : "General");
+
+    const meetingTask: Task = {
+      id: crypto.randomUUID(),
+      project,
+      title,
+      description: meetingNotes.trim(),
+      priority: "medium",
+      dueDate: selectedDay,
+      tags: ["meeting"],
+      status: "todo",
+      createdAt: new Date().toISOString(),
+      favorite: false,
+    };
+
+    const action: BoardAction = { type: "create", payload: meetingTask };
+    applyBoardAction(action);
+    setMeetingTitle("");
+    setMeetingNotes("");
+    setNotice(`Meeting planned for ${selectedDay} in ${project}`);
+  };
 
   const addTask = (event: React.FormEvent) => {
     event.preventDefault();
@@ -453,44 +586,71 @@ export default function BoardPage() {
       return;
     }
 
-    const now = new Date().toISOString();
-    const existing = draft.id ? state.tasks.find((task) => task.id === draft.id) : undefined;
+    const nextTask = buildTaskFromDraft({
+      ...draft,
+      project: activeProject ?? draft.project,
+    });
 
-    const nextTask: Task = {
-      id: draft.id ?? crypto.randomUUID(),
-      project: activeProject ?? (draft.project.trim() || "General"),
-      title: draft.title.trim(),
-      description: draft.description.trim(),
-      priority: draft.priority,
-      dueDate: draft.dueDate,
-      tags: draft.tags
-        .split(",")
-        .map((tag) => tag.trim())
-        .filter(Boolean),
-      status: draft.status,
-      createdAt: existing?.createdAt ?? now,
-      favorite: existing?.favorite ?? false,
+    const action: BoardAction = {
+      type: "create",
+      payload: nextTask,
     };
 
-    dispatch({ type: draft.id ? "edit" : "create", payload: nextTask });
+    applyBoardAction(action);
+
     setDraft(emptyDraft);
-    if (activeProject) {
-      goToProject(activeProject, "board");
-    } else {
-      goTo("home", "board");
-    }
     setSearchTerm("");
     setGlobalSearchTerm("");
-    setNotice(draft.id ? "Task updated" : "Task added to board");
+    setProjectFilter(activeProject ?? "all");
+    setPriorityFilter("all");
+    setSortDirection("asc");
+
+    if (activeProject) {
+      goToProject(activeProject, "board");
+      setNotice("Task added to project board");
+      return;
+    }
+
+    if (!draft.id && activeSection === "portfolios" && !activeProject) {
+      if (portfolioSelection) {
+        goToProject(portfolioSelection, "board");
+        setNotice("Task added to selected project workspace.");
+        return;
+      }
+      goTo("home", "board");
+      setNotice("Task added. Open Portfolios and choose a project to manage it.");
+      return;
+    }
+
+    if (!draft.id && (activeSection === "favorites" || activeSection === "goals" || activeSection === "inbox")) {
+      goTo("home", "board");
+      setNotice("Task added. Switched to Home so you can see it immediately.");
+      return;
+    }
+
+    goTo(activeSection, "board");
+    setNotice("Task added to board");
+  };
+
+  const saveEditedTask = (event: React.FormEvent) => {
+    event.preventDefault();
+    setFormError("");
+    if (!editDraft.id) return;
+    if (!editDraft.title.trim()) {
+      setFormError("Title is required.");
+      return;
+    }
+
+    const nextTask = buildTaskFromDraft(editDraft);
+    applyBoardAction({ type: "edit", payload: nextTask });
+    setShowEditModal(false);
+    setEditDraft(emptyDraft);
+    setNotice("Task updated");
   };
 
   const startEdit = (task: Task) => {
-    setDraft(toDraft(task));
-    if (activeProject) {
-      goToProject(activeProject, "board");
-    } else {
-      goTo(activeSection, "board");
-    }
+    setEditDraft(toDraft(task));
+    setShowEditModal(true);
     setFormError("");
   };
 
@@ -603,13 +763,16 @@ export default function BoardPage() {
 
   const sectionTitle = sideItems.find((item) => item.key === activeSection)?.label ?? "Home";
   const projectTitle = activeProject ? `Project Portal: ${activeProject}` : sectionTitle;
+  const openProjectWorkspace = (project: string) => goToProject(project, "overview");
 
   const renderTaskCard = (task: Task) => (
     <div
       key={task.id}
       draggable
       onDragStart={(event) => event.dataTransfer.setData("text/plain", task.id)}
-      className={`rounded-xl border border-[var(--border)] bg-[var(--panel)] p-3 shadow-sm ${state.settings.compactCards ? "text-xs" : "text-sm"}`}
+      onClick={() => openProjectWorkspace(task.project)}
+      title={`Open ${task.project} workspace`}
+      className={`rounded-xl border border-[var(--border)] bg-[var(--panel)] p-3 shadow-sm transition hover:border-[var(--brand)] hover:shadow ${state.settings.compactCards ? "text-xs" : "text-sm"}`}
     >
       <div className="flex items-start justify-between gap-2">
         <h4 className="font-semibold">{task.title}</h4>
@@ -619,38 +782,53 @@ export default function BoardPage() {
         {task.description || "Note: Add details for implementation and follow-up."}
       </p>
 
-      <div className="mt-2 text-[11px] text-[var(--muted)]">Project: {task.project}</div>
+      <div className="mt-2 text-[11px] text-[var(--muted)]">
+        Project:{" "}
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            openProjectWorkspace(task.project);
+          }}
+          className="rounded bg-[var(--panel-soft)] px-1.5 py-0.5 text-[var(--brand)] hover:underline"
+        >
+          {task.project}
+        </button>
+      </div>
       <div className="mt-1 text-[11px] text-[var(--muted)]">Due: {task.dueDate || "-"}</div>
 
-      <div className="mt-3 flex items-center justify-between">
-        <div className="flex -space-x-1">
-          <span className="h-4 w-4 rounded-full border border-[var(--panel)] bg-[#e9a6a6]" />
-          <span className="h-4 w-4 rounded-full border border-[var(--panel)] bg-[#9ccde0]" />
-          <span className="h-4 w-4 rounded-full border border-[var(--panel)] bg-[#e8c89f]" />
-        </div>
-        <div className="text-[10px] text-[var(--muted)]">📄 {task.tags.length}  💬 {task.description ? 1 : 0}</div>
-      </div>
-
       <div className="mt-2 flex gap-1">
-        <button onClick={() => startEdit(task)} className="rounded border border-[var(--border)] px-2 py-1 text-[11px]">Edit</button>
-        <button onClick={() => dispatch({ type: "toggleFavorite", payload: { id: task.id } })} className="rounded border border-[var(--border)] px-2 py-1 text-[11px]">{task.favorite ? "★" : "☆"}</button>
-        <button onClick={() => dispatch({ type: "delete", payload: { id: task.id } })} className="rounded border border-[var(--danger)] px-2 py-1 text-[11px] text-[var(--danger)]">Delete</button>
+        <button onClick={(event) => { event.stopPropagation(); startEdit(task); }} className="rounded border border-[var(--border)] px-2 py-1 text-[11px]">Edit</button>
+        <button onClick={(event) => { event.stopPropagation(); dispatch({ type: "toggleFavorite", payload: { id: task.id } }); }} className="rounded border border-[var(--border)] px-2 py-1 text-[11px]">{task.favorite ? "★" : "☆"}</button>
+        <button onClick={(event) => { event.stopPropagation(); dispatch({ type: "delete", payload: { id: task.id } }); }} className="rounded border border-[var(--danger)] px-2 py-1 text-[11px] text-[var(--danger)]">Delete</button>
       </div>
     </div>
   );
 
+  if (!isMounted) {
+    return (
+      <main className="h-screen w-full">
+        <div className="h-full w-full bg-[var(--panel)]" />
+      </main>
+    );
+  }
+
   return (
-    <main className="mx-auto h-screen max-w-[1740px] px-4 py-4 md:px-6">
-      <div className="surface rise-in h-[calc(100vh-2rem)] overflow-hidden">
+    <main className="h-screen w-full">
+      <div
+        className={`surface h-full overflow-hidden rounded-none border-0 shadow-none transform-gpu transition-all duration-220 ease-out origin-center ${
+          isPageTransitioning ? "scale-[0.985] opacity-0 blur-[1px]" : "scale-100 opacity-100 blur-0"
+        }`}
+      >
         <div className="grid h-full lg:grid-cols-[220px_1fr]">
-          <aside className="hidden border-r border-[var(--border)] bg-[var(--panel-soft)] p-4 lg:flex lg:flex-col lg:justify-between">
+          <aside className="hidden min-h-0 overflow-auto border-r border-[var(--border)] bg-[var(--panel-soft)] p-4 lg:flex lg:flex-col lg:justify-between">
             <div>
               <div className="mb-6 flex items-center gap-2">
                 <div className="h-8 w-8 rounded-lg bg-[var(--brand)]" />
                 <span className="font-semibold">turbo</span>
               </div>
 
-              <nav className="space-y-1">
+              <nav className="max-h-[60vh] space-y-1 overflow-auto pr-1">
                 {sideItems.map((item) => (
                   <button
                     key={item.key}
@@ -670,12 +848,13 @@ export default function BoardPage() {
             <button type="button" onClick={() => setShowInviteModal(true)} className="rounded-xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-sm">Invite teammates</button>
           </aside>
 
-          <div className="flex h-full min-h-0 flex-col p-4 md:p-6">
+          <div className="flex h-full min-h-0 flex-col overflow-hidden p-4 md:p-6">
             <header className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h1 className="text-2xl font-semibold">{projectTitle}</h1>
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
                   <span>Section: {sectionTitle}</span>
+                  {activeProject && <span>Project: {activeProject}</span>}
                   <span>Total Tasks: {summary.total}</span>
                   <span className="rounded-full bg-[var(--panel-soft)] px-2 py-0.5 text-[var(--brand)]">{summary.todo} Active</span>
                 </div>
@@ -701,9 +880,25 @@ export default function BoardPage() {
                 <button
                   key={tab.key}
                   type="button"
-                  onClick={() => (activeProject ? goToProject(activeProject, tab.key) : goTo(activeSection, tab.key))}
+                  onClick={() => {
+                    if (activeSection === "inbox") {
+                      goTo("inbox", "board");
+                      setNotice("Inbox always opens the communication hub.");
+                      return;
+                    }
+                    if (activeSection === "goals") {
+                      goTo("goals", "board");
+                      setNotice("Goals always opens list view.");
+                      return;
+                    }
+                    if (activeProject) {
+                      goToProject(activeProject, tab.key);
+                      return;
+                    }
+                    goTo(activeSection, tab.key);
+                  }}
                   className={`flex items-center gap-1 rounded-full px-3 py-1 text-xs ${
-                    activeTab === tab.key
+                    activeWorkspaceTab === tab.key
                       ? "bg-[#f1cc58] font-semibold text-slate-900"
                       : "border border-transparent bg-transparent text-[var(--muted)] hover:bg-[var(--panel)]"
                   }`}
@@ -717,22 +912,97 @@ export default function BoardPage() {
             {notice && <div className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--panel-soft)] px-3 py-2 text-sm">{notice}</div>}
 
             {activeSection === "portfolios" && !activeProject && (
-              <section className="mb-3 rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-3">
-                <div className="mb-2 flex items-center justify-between">
-                  <h3 className="text-sm font-semibold">Project Portals</h3>
-                  <span className="text-xs text-[var(--muted)]">Open a dedicated project board + calendar</span>
+              <section className="mb-2 rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="whitespace-nowrap text-xs font-semibold">Project Workspace</span>
+                  <select
+                    value={portfolioSelection}
+                    onChange={(event) => setPortfolioSelection(event.target.value)}
+                    className="min-w-[180px] flex-1 rounded-xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-sm"
+                  >
+                    {projectPortals.length === 0 && <option value="">No projects yet</option>}
+                    {projectPortals.map((project) => (
+                      <option key={project} value={project}>
+                        {project}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!portfolioSelection) {
+                        setNotice("Select a project to open workspace.");
+                        return;
+                      }
+                      goToProject(portfolioSelection, "board");
+                    }}
+                    className="rounded-xl bg-[var(--brand)] px-3 py-2 text-sm font-semibold text-white"
+                  >
+                    Open Project
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!portfolioSelection) {
+                        setNotice("Select a project to open calendar.");
+                        return;
+                      }
+                      goToProject(portfolioSelection, "calendar");
+                    }}
+                    className="rounded-xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-xs"
+                  >
+                    Open Project Calendar
+                  </button>
+                  <select
+                    value={portfolioFilteredSelection}
+                    onChange={(event) => setPortfolioFilteredSelection(event.target.value)}
+                    className="min-w-[180px] rounded-xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-xs"
+                  >
+                    {portfolioFilteredProjects.length === 0 && <option value="">No filtered projects</option>}
+                    {portfolioFilteredProjects.map((project) => (
+                      <option key={project} value={project}>
+                        {project}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!portfolioFilteredSelection) {
+                        setNotice("Select a filtered project first.");
+                        return;
+                      }
+                      goToProject(portfolioFilteredSelection, "board");
+                    }}
+                    className="rounded-xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-xs"
+                  >
+                    Open Selected
+                  </button>
                 </div>
-                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                  {projectPortals.map((project) => (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] text-[var(--muted)]">Click project icon to open:</span>
+                  {portfolioFilteredProjects.map((project) => (
                     <button
-                      key={project}
+                      key={`quick-${project}`}
+                      type="button"
+                      onMouseEnter={() => setPortfolioFilteredSelection(project)}
                       onClick={() => goToProject(project, "board")}
-                      className="rounded-xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-left text-sm hover:border-[var(--brand)]"
+                      className={`rounded-full border px-2.5 py-1 text-xs transition ${
+                        portfolioFilteredSelection === project
+                          ? "border-[var(--brand)] bg-[var(--brand)]/10 text-[var(--brand)]"
+                          : "border-[var(--border)] bg-[var(--panel)] hover:border-[var(--brand)]"
+                      }`}
+                      title={`Open ${project} workspace`}
                     >
+                      <span className="mr-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-[var(--panel-soft)] text-[10px] font-semibold">
+                        {project.slice(0, 1).toUpperCase()}
+                      </span>
                       {project}
+                      <span className="ml-1 rounded bg-[var(--brand)]/15 px-1 py-0.5 text-[10px] text-[var(--brand)]">
+                        {projectTaskCounts[project] ?? 0}
+                      </span>
                     </button>
                   ))}
-                  {projectPortals.length === 0 && <p className="text-sm text-[var(--muted)]">Create tasks with project names to generate portals.</p>}
                 </div>
               </section>
             )}
@@ -759,7 +1029,20 @@ export default function BoardPage() {
               >
                 Clear
               </button>
-              <button onClick={() => (activeProject ? goToProject(activeProject, "board") : goTo(activeSection, "board"))} className="rounded-xl bg-[var(--brand)] px-3 py-2.5 text-sm font-semibold text-white">+ Add New Task</button>
+              {showTopAddTask && (
+                <button
+                  onClick={() => {
+                    if (activeProject) {
+                      goToProject(activeProject, "board");
+                      return;
+                    }
+                    goTo(activeSection, "board");
+                  }}
+                  className="rounded-xl bg-[var(--brand)] px-3 py-2.5 text-sm font-semibold text-white"
+                >
+                  + Add New Task
+                </button>
+              )}
             </section>
 
             {activeProject && (
@@ -774,10 +1057,11 @@ export default function BoardPage() {
               </div>
             )}
 
-            <section className="grid min-h-0 flex-1 gap-4 xl:grid-cols-[320px_1fr]">
-              <aside className="flex min-h-0 flex-col gap-3">
-                <form onSubmit={addTask} className="rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-4">
-                  <h2 className="mb-3 text-lg font-semibold">{draft.id ? "Edit Task" : "Create Task"}</h2>
+            <section className={`grid min-h-0 flex-1 gap-4 ${canCreateTasks ? "xl:grid-cols-[320px_1fr]" : ""}`}>
+              {canCreateTasks && (
+                <aside className="flex min-h-0 flex-col gap-3 overflow-auto pr-1">
+                  <form onSubmit={addTask} className="shrink-0 rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-4">
+                  <h2 className="mb-3 text-lg font-semibold">Create Task</h2>
 
                   <div className="space-y-3">
                     {activeProject ? (
@@ -803,26 +1087,46 @@ export default function BoardPage() {
                   {formError && <p className="mt-3 rounded-xl border border-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 text-sm text-[var(--danger)]">{formError}</p>}
 
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <button type="submit" className="rounded-xl bg-[var(--brand)] px-3 py-2 text-sm font-semibold text-white">{draft.id ? "Save Changes" : "Add Task"}</button>
-                    {draft.id && <button type="button" onClick={() => setDraft(emptyDraft)} className="rounded-xl border border-[var(--border)] bg-[var(--panel)] px-3 py-2 text-sm">Cancel</button>}
+                    <button type="submit" className="rounded-xl bg-[var(--brand)] px-3 py-2 text-sm font-semibold text-white">Add Task</button>
                     <button type="button" onClick={resetBoard} className="rounded-xl border border-[var(--danger)] px-3 py-2 text-sm text-[var(--danger)]">Reset Board</button>
                   </div>
-                </form>
+                  </form>
+                </aside>
+              )}
 
-              </aside>
-
-              <section className="min-h-0">
-                {activeTab === "overview" && (
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <section className="min-h-0 overflow-hidden">
+                {activeWorkspaceTab === "overview" && (
+                  <div className="h-full overflow-auto rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-3">
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                     <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-4"><p className="text-xs text-[var(--muted)]">Total</p><p className="text-2xl font-semibold">{summary.total}</p></div>
                     <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-4"><p className="text-xs text-[var(--muted)]">Todo</p><p className="text-2xl font-semibold">{summary.todo}</p></div>
                     <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-4"><p className="text-xs text-[var(--muted)]">Doing</p><p className="text-2xl font-semibold">{summary.doing}</p></div>
                     <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-4"><p className="text-xs text-[var(--muted)]">Done</p><p className="text-2xl font-semibold">{summary.done}</p></div>
                     <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-4"><p className="text-xs text-[var(--muted)]">Favorites</p><p className="text-2xl font-semibold">{summary.favorites}</p></div>
+                    </div>
+                    {activeProject && (
+                      <div className="mt-3 grid gap-3 md:grid-cols-3">
+                        <div className="rounded-xl border border-[var(--border)] bg-[var(--panel)] p-3">
+                          <p className="text-sm font-semibold">{activeProject} Board</p>
+                          <p className="text-xs text-[var(--muted)]">Manage tasks, status and priorities.</p>
+                          <button onClick={() => goToProject(activeProject, "board")} className="mt-2 rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs">Open Board</button>
+                        </div>
+                        <div className="rounded-xl border border-[var(--border)] bg-[var(--panel)] p-3">
+                          <p className="text-sm font-semibold">{activeProject} Calendar</p>
+                          <p className="text-xs text-[var(--muted)]">Plan meetings and due dates.</p>
+                          <button onClick={() => goToProject(activeProject, "calendar")} className="mt-2 rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs">Open Calendar</button>
+                        </div>
+                        <div className="rounded-xl border border-[var(--border)] bg-[var(--panel)] p-3">
+                          <p className="text-sm font-semibold">{activeProject} Documents</p>
+                          <p className="text-xs text-[var(--muted)]">Upload files and references.</p>
+                          <button onClick={() => goToProject(activeProject, "documents")} className="mt-2 rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs">Open Documents</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
-                {activeTab === "list" && (
+                {activeWorkspaceTab === "list" && (
                   <div className="h-full overflow-auto rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-3">
                     <table className="w-full min-w-[680px] text-left text-sm">
                       <thead><tr className="text-[var(--muted)]"><th className="px-2 py-2">Task</th><th className="px-2 py-2">Status</th><th className="px-2 py-2">Due</th><th className="px-2 py-2">Actions</th></tr></thead>
@@ -841,7 +1145,7 @@ export default function BoardPage() {
                   </div>
                 )}
 
-                {activeTab === "board" && (
+                {activeWorkspaceTab === "board" && (
                   <section className="grid h-full min-h-0 gap-3 md:grid-cols-3">
                     {COLUMN_ORDER.map((status) => (
                       <article key={status} onDragOver={(event) => event.preventDefault()} onDrop={(event) => onDropToColumn(event, status)} className={`${columnPalette[status]} flex min-h-0 flex-col rounded-2xl border border-[var(--border)] p-3`}>
@@ -852,28 +1156,41 @@ export default function BoardPage() {
                   </section>
                 )}
 
-                {activeTab === "calendar" && (
+                {activeWorkspaceTab === "calendar" && (
                   <section className="grid h-full min-h-0 gap-3 lg:grid-cols-[2fr_1fr]">
-                    <div className="h-full overflow-auto rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-3">
+                    <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-3">
                       <div className="mb-3 flex items-center justify-between">
                         <h3 className="font-semibold">{calendarMonth.toLocaleDateString(undefined, { month: "long", year: "numeric" })}</h3>
                         <div className="flex gap-2"><button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1, 1))} className="rounded border border-[var(--border)] px-2 py-1 text-xs">Prev</button><button onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 1))} className="rounded border border-[var(--border)] px-2 py-1 text-xs">Next</button></div>
                       </div>
-                      <div className="grid grid-cols-7 gap-2 text-center text-xs font-medium text-[var(--muted)]">{"Sun Mon Tue Wed Thu Fri Sat".split(" ").map((d) => <div key={d}>{d}</div>)}</div>
-                      <div className="mt-2 grid grid-cols-7 gap-2">
+                      <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-medium text-[var(--muted)]">{"Sun Mon Tue Wed Thu Fri Sat".split(" ").map((d) => <div key={d}>{d}</div>)}</div>
+                      <div className="mt-2 grid min-h-0 flex-1 grid-cols-7 grid-rows-6 gap-1">
                         {monthGrid.map((day) => {
                           const key = day.toISOString().slice(0, 10);
-                          const count = (tasksByDueDate[key] ?? []).length;
+                          const dayTasks = tasksByDueDate[key] ?? [];
+                          const count = dayTasks.length;
                           const inMonth = day.getMonth() === calendarMonth.getMonth();
                           const selected = key === selectedDay;
+                          const projectMarkers = Array.from(new Set(dayTasks.map((task) => task.project))).slice(0, 3);
                           return (
                             <button
                               key={key}
                               onClick={() => setSelectedDay(key)}
-                              className={`min-h-[78px] rounded-xl border border-[var(--border)] p-2 text-left text-xs ${selected ? "ring-2 ring-[var(--brand)]" : ""} ${inMonth ? "bg-[var(--panel)]" : "bg-[var(--panel-soft)] opacity-60"}`}
+                              className={`h-full min-h-0 rounded-lg border border-[var(--border)] p-1 text-left text-[10px] ${selected ? "ring-2 ring-[var(--brand)]" : ""} ${inMonth ? "bg-[var(--panel)]" : "bg-[var(--panel-soft)] opacity-60"}`}
                             >
-                              <div className="font-medium">{day.getDate()}</div>
-                              {count > 0 && <div className="mt-1 rounded bg-[var(--panel-soft)] px-1 py-0.5 text-[10px]">{count} task{count > 1 ? "s" : ""}</div>}
+                              <div className="font-medium leading-none">{day.getDate()}</div>
+                              {count > 0 && <div className="mt-0.5 inline-block rounded bg-[var(--panel-soft)] px-1 py-0.5 text-[9px]">{count}</div>}
+                              {projectMarkers.length > 0 && (
+                                <div className="mt-0.5 flex items-center gap-1">
+                                  {projectMarkers.map((project, index) => (
+                                    <span
+                                      key={`${project}-${index}`}
+                                      className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--brand)]/70"
+                                      title={project}
+                                    />
+                                  ))}
+                                </div>
+                              )}
                             </button>
                           );
                         })}
@@ -883,12 +1200,52 @@ export default function BoardPage() {
                     <div className="h-full overflow-auto rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-3">
                       <h4 className="font-semibold">{selectedDay}</h4>
                       <p className="mb-2 text-xs text-[var(--muted)]">Tasks due on selected day</p>
-                      <div className="space-y-2">{selectedDayTasks.length === 0 ? <p className="text-sm text-[var(--muted)]">No tasks due on this day.</p> : selectedDayTasks.map((task) => renderTaskCard(task))}</div>
+                      <div className="mb-3 space-y-2 rounded-xl border border-[var(--border)] bg-[var(--panel)] p-2">
+                        <div className="text-xs font-medium">Plan Meeting {activeProject ? `for ${activeProject}` : ""}</div>
+                        <input
+                          value={meetingTitle}
+                          onChange={(event) => setMeetingTitle(event.target.value)}
+                          placeholder="Meeting title"
+                          className="w-full rounded border border-[var(--border)] bg-[var(--panel-soft)] px-2 py-1 text-xs"
+                        />
+                        <input
+                          value={meetingNotes}
+                          onChange={(event) => setMeetingNotes(event.target.value)}
+                          placeholder="Notes (optional)"
+                          className="w-full rounded border border-[var(--border)] bg-[var(--panel-soft)] px-2 py-1 text-xs"
+                        />
+                        <button onClick={scheduleMeeting} className="rounded border border-[var(--brand)] bg-[var(--brand)] px-2 py-1 text-xs font-semibold text-white">
+                          Plan Meeting on {selectedDay}
+                        </button>
+                      </div>
+                      <div className="space-y-2">
+                        {selectedDayTasks.length === 0 ? (
+                          <p className="text-sm text-[var(--muted)]">No tasks due on this day.</p>
+                        ) : (
+                          selectedDayTasks.map((task) => (
+                            <div key={task.id} className="rounded-xl border border-[var(--border)] bg-[var(--panel)] p-3">
+                              <div className="flex items-start justify-between gap-2">
+                                <h5 className="font-medium">{task.title}</h5>
+                                <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${priorityStyles[task.priority]}`}>
+                                  {task.priority}
+                                </span>
+                              </div>
+                              <div className="mt-1 text-xs text-[var(--muted)]">{task.description || "No description"}</div>
+                              <div className="mt-2 grid grid-cols-2 gap-2 text-[11px] text-[var(--muted)]">
+                                <span>Project: {task.project}</span>
+                                <span className="capitalize">Status: {task.status}</span>
+                                <span>Due: {task.dueDate || "-"}</span>
+                                <span>Tags: {task.tags.length ? task.tags.join(", ") : "-"}</span>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
                     </div>
                   </section>
                 )}
 
-                {activeTab === "documents" && (
+                {activeWorkspaceTab === "documents" && (
                   <section className="grid h-full min-h-0 gap-3 lg:grid-cols-[1fr_2fr]">
                     <div className="rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-4">
                       <h3 className="mb-2 text-lg font-semibold">Upload Document</h3>
@@ -913,7 +1270,7 @@ export default function BoardPage() {
                   </section>
                 )}
 
-                {activeTab === "messages" && (
+                {activeWorkspaceTab === "messages" && (
                   <section className="grid h-full min-h-0 gap-3 lg:grid-cols-[2fr_1.2fr]">
                     <div className="flex min-h-0 flex-col rounded-2xl border border-[var(--border)] bg-[var(--panel-soft)] p-3">
                       <h3 className="mb-2 text-lg font-semibold">Messages</h3>
@@ -952,7 +1309,7 @@ export default function BoardPage() {
 
       {showInviteModal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 px-4">
-          <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5 shadow-2xl">
+          <div className="max-h-[90vh] w-full max-w-md overflow-auto rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5 shadow-2xl">
             <h3 className="text-lg font-semibold">Invite Teammate</h3>
             <p className="mt-1 text-sm text-[var(--muted)]">No backend: invite is local-only.</p>
             <form onSubmit={handleInviteSubmit} className="mt-4 space-y-3"><input type="email" required value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="name@email.com" className="w-full rounded-xl border border-[var(--border)] bg-[var(--panel-soft)] px-3 py-2.5" /><select value={inviteAccess} onChange={(e) => setInviteAccess(e.target.value as AccessLevel)} className="w-full rounded-xl border border-[var(--border)] bg-[var(--panel-soft)] px-3 py-2.5"><option value="viewer">Viewer</option><option value="editor">Editor</option><option value="admin">Admin</option></select><div className="flex justify-end gap-2"><button type="button" onClick={() => setShowInviteModal(false)} className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm">Cancel</button><button type="submit" className="rounded-lg bg-[var(--brand)] px-3 py-2 text-sm font-semibold text-white">Invite</button></div></form>
@@ -960,9 +1317,38 @@ export default function BoardPage() {
         </div>
       )}
 
+      {showEditModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 px-4 backdrop-blur-sm">
+          <div className="max-h-[90vh] w-full max-w-lg overflow-auto rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5 shadow-2xl">
+            <h3 className="text-lg font-semibold">Edit Task</h3>
+            <p className="mt-1 text-sm text-[var(--muted)]">Update task details and save.</p>
+            <form onSubmit={saveEditedTask} className="mt-4 space-y-3">
+              <select value={editDraft.project} onChange={(e) => setEditDraft((prev) => ({ ...prev, project: e.target.value }))} className="w-full rounded-xl border border-[var(--border)] bg-[var(--panel-soft)] px-3 py-2.5">
+                {projectOptions.map((project) => (
+                  <option key={project} value={project}>{project}</option>
+                ))}
+              </select>
+              <input value={editDraft.title} onChange={(e) => setEditDraft((prev) => ({ ...prev, title: e.target.value }))} placeholder="Title *" className="w-full rounded-xl border border-[var(--border)] bg-[var(--panel-soft)] px-3 py-2.5" />
+              <textarea value={editDraft.description} onChange={(e) => setEditDraft((prev) => ({ ...prev, description: e.target.value }))} placeholder="Description" rows={3} className="w-full rounded-xl border border-[var(--border)] bg-[var(--panel-soft)] px-3 py-2.5" />
+              <div className="grid grid-cols-2 gap-2">
+                <select value={editDraft.priority} onChange={(e) => setEditDraft((prev) => ({ ...prev, priority: e.target.value as TaskPriority }))} className="rounded-xl border border-[var(--border)] bg-[var(--panel-soft)] px-3 py-2.5"><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select>
+                <select value={editDraft.status} onChange={(e) => setEditDraft((prev) => ({ ...prev, status: e.target.value as TaskStatus }))} className="rounded-xl border border-[var(--border)] bg-[var(--panel-soft)] px-3 py-2.5"><option value="todo">Todo</option><option value="doing">Doing</option><option value="done">Done</option></select>
+              </div>
+              <input type="date" value={editDraft.dueDate} onChange={(e) => setEditDraft((prev) => ({ ...prev, dueDate: e.target.value }))} className="w-full rounded-xl border border-[var(--border)] bg-[var(--panel-soft)] px-3 py-2.5" />
+              <input value={editDraft.tags} onChange={(e) => setEditDraft((prev) => ({ ...prev, tags: e.target.value }))} placeholder="Tags (comma separated)" className="w-full rounded-xl border border-[var(--border)] bg-[var(--panel-soft)] px-3 py-2.5" />
+              {formError && <p className="rounded-xl border border-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 text-sm text-[var(--danger)]">{formError}</p>}
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={() => { setShowEditModal(false); setEditDraft(emptyDraft); }} className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm">Cancel</button>
+                <button type="submit" className="rounded-lg bg-[var(--brand)] px-3 py-2 text-sm font-semibold text-white">Save</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {showSettingsModal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 px-4">
-          <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5 shadow-2xl">
+          <div className="max-h-[90vh] w-full max-w-md overflow-auto rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5 shadow-2xl">
             <h3 className="text-lg font-semibold">Settings</h3>
             <p className="mt-1 text-sm text-[var(--muted)]">Saved locally in browser storage.</p>
             <form onSubmit={handleSettingsSave} className="mt-4 space-y-3">
@@ -977,7 +1363,7 @@ export default function BoardPage() {
 
       {showShareModal && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 px-4">
-          <div className="w-full max-w-md rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5 shadow-2xl">
+          <div className="max-h-[90vh] w-full max-w-md overflow-auto rounded-2xl border border-[var(--border)] bg-[var(--panel)] p-5 shadow-2xl">
             <h3 className="text-lg font-semibold">Share</h3>
             <p className="mt-1 text-sm text-[var(--muted)]">Create a local share summary.</p>
             <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--panel-soft)] p-3 text-sm">{`Board snapshot: ${summary.total} tasks (${summary.todo} todo, ${summary.doing} doing, ${summary.done} done)`}</div>

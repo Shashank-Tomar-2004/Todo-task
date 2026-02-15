@@ -1,4 +1,4 @@
-import { AUTH_STORAGE_KEY, BOARD_STORAGE_KEY } from "./constants";
+import { AUTH_STORAGE_KEY, BOARD_STORAGE_BACKUP_KEY, BOARD_STORAGE_KEY } from "./constants";
 import type {
   ActivityItem,
   AppSettings,
@@ -106,19 +106,25 @@ function sanitizeSettings(value: unknown): AppSettings {
   };
 }
 
-export function loadBoardState(): BoardState {
-  if (typeof window === "undefined") {
-    return {
-      tasks: [],
-      activity: [],
-      messages: [],
-      documents: [],
-      settings: { compactCards: false, showCompleted: true, accent: "teal" },
-    };
-  }
+interface PersistedBoardPayload {
+  version: number;
+  updatedAt: string;
+  state: BoardState;
+}
 
-  const parsed = safeParse<Record<string, unknown>>(localStorage.getItem(BOARD_STORAGE_KEY), {});
+function emptyBoardState(): BoardState {
+  return {
+    tasks: [],
+    activity: [],
+    messages: [],
+    documents: [],
+    settings: { compactCards: false, showCompleted: true, accent: "teal" },
+  };
+}
 
+function sanitizeBoardState(raw: unknown): BoardState {
+  if (!raw || typeof raw !== "object") return emptyBoardState();
+  const parsed = raw as Record<string, unknown>;
   return {
     tasks: Array.isArray(parsed.tasks) ? parsed.tasks.map((task) => sanitizeTask(task as Partial<Task>)) : [],
     activity: sanitizeActivity(parsed.activity),
@@ -128,9 +134,67 @@ export function loadBoardState(): BoardState {
   };
 }
 
+function parsePersistedBoard(raw: string | null): PersistedBoardPayload | null {
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && "state" in (parsed as Record<string, unknown>)) {
+      const payload = parsed as Partial<PersistedBoardPayload>;
+      return {
+        version: typeof payload.version === "number" ? payload.version : 1,
+        updatedAt: typeof payload.updatedAt === "string" ? payload.updatedAt : new Date(0).toISOString(),
+        state: sanitizeBoardState(payload.state),
+      };
+    }
+
+    // Backward compatibility for legacy payloads saved directly as BoardState.
+    return {
+      version: 1,
+      updatedAt: new Date(0).toISOString(),
+      state: sanitizeBoardState(parsed),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function loadBoardState(): BoardState {
+  if (typeof window === "undefined") {
+    return emptyBoardState();
+  }
+
+  const main = parsePersistedBoard(localStorage.getItem(BOARD_STORAGE_KEY));
+  const backup = parsePersistedBoard(localStorage.getItem(BOARD_STORAGE_BACKUP_KEY));
+  const candidates = [main, backup].filter(Boolean) as PersistedBoardPayload[];
+
+  if (candidates.length === 0) return emptyBoardState();
+
+  candidates.sort((a, b) => {
+    if (b.state.tasks.length !== a.state.tasks.length) {
+      return b.state.tasks.length - a.state.tasks.length;
+    }
+    return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+  });
+
+  return candidates[0].state;
+}
+
 export function saveBoardState(state: BoardState) {
   if (typeof window === "undefined") return;
-  localStorage.setItem(BOARD_STORAGE_KEY, JSON.stringify(state));
+  const payload: PersistedBoardPayload = {
+    version: 2,
+    updatedAt: new Date().toISOString(),
+    state,
+  };
+
+  try {
+    const serialized = JSON.stringify(payload);
+    localStorage.setItem(BOARD_STORAGE_KEY, serialized);
+    localStorage.setItem(BOARD_STORAGE_BACKUP_KEY, serialized);
+  } catch {
+    // If storage is unavailable/quota-bound, keep UI responsive.
+  }
 }
 
 export interface AuthState {

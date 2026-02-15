@@ -63,10 +63,7 @@ body {
   margin: 0;
   font-family: var(--font-geist), system-ui, -apple-system, Segoe UI, sans-serif;
   color: var(--text);
-  background:
-    radial-gradient(circle at 8% -5%, var(--bg-accent), transparent 36%),
-    radial-gradient(circle at 90% 0%, color-mix(in srgb, var(--brand) 25%, transparent), transparent 32%),
-    var(--bg);
+  background: var(--bg);
 }
 
 button,
@@ -75,6 +72,20 @@ select,
 textarea {
   font: inherit;
   color: inherit;
+}
+
+button,
+[role="button"],
+a[href],
+summary,
+select {
+  cursor: pointer;
+}
+
+button:disabled,
+input:disabled,
+select:disabled {
+  cursor: not-allowed;
 }
 
 .surface {
