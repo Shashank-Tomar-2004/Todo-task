@@ -825,7 +825,7 @@ export default function BoardPage() {
             <div>
               <div className="mb-6 flex items-center gap-2">
                 <div className="h-8 w-8 rounded-lg bg-[var(--brand)]" />
-                <span className="font-semibold">turbo</span>
+                <span className="font-semibold">Shashank</span>
               </div>
 
               <nav className="max-h-[60vh] space-y-1 overflow-auto pr-1">
